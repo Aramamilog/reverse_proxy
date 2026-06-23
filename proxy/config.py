@@ -30,4 +30,4 @@ TIMEOUTS = Timeouts(
 )
 
 
-CONNECTION_LIMIT = Semaphore(1)
+CONNECTION_LIMIT = Semaphore(100)
