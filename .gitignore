@@ -3,3 +3,4 @@
 faq.md
 tests/fast_producer.py
 tests/slow_consumer.py
+local/*

@@ -4,12 +4,46 @@ import asyncio
 from asyncio.streams import StreamReader, StreamWriter
 
 from config import CONNECTION_LIMIT, TIMEOUTS
-from upstream_pool import upstream_pool
+from upstream_connection_pool import upstream_connection_pool
 from utils.http import http_response_parser, http_request_parser
 
 
 CLIENT_READ_SIZE = 1024
 UPSTREAM_READ_SIZE = 1024
+
+CLIENT_CONNECTIONS = 0
+TOTAL_REQUESTS = 0
+
+
+def _should_keep_client_connection_alive(request_model) -> bool:
+    connection = request_model.headers.get("connection", "").lower()
+
+    if request_model.version == "HTTP/1.0":
+        return connection == "keep-alive"
+
+    return connection != "close"
+
+
+def _rewrite_response_connection_header(raw_response: bytes, keep_alive: bool) -> bytes:
+    headers_part, separator, body_part = raw_response.partition(
+        http_response_parser.SEPARATOR
+    )
+
+    lines = headers_part.split(b"\r\n")
+
+    filtered_lines = [
+        line
+        for line in lines
+        if not line.lower().startswith(b"connection:")
+    ]
+
+    if keep_alive:
+        filtered_lines.append(b"Connection: keep-alive")
+    else:
+        filtered_lines.append(b"Connection: close")
+
+    return b"\r\n".join(filtered_lines) + separator + body_part
+
 
 async def stream_bytes(
         reader: StreamReader,
@@ -41,33 +75,34 @@ async def stream_bytes(
                 await TIMEOUTS.write_timeout(writer.drain())
 
 
-async def _process_request(
+async def _process_one_request(
     client_reader: StreamReader,
     client_writer: StreamWriter,
-) -> None:
+) -> bool:
+    upstream_connection = None
     upstream_writer: StreamWriter | None = None
     upstream_address = None
-
-    client_address = client_writer.get_extra_info('peername')
-    logger.info(f'>> Start client serving: {client_address=}')
+    upstream_reusable = False
 
     try:
-        #-#-# Proxy read from client and write to upstream #-#-#
-        client_raw_request = await TIMEOUTS.read_timeout(client_reader.readuntil(separator=http_request_parser.SEPARATOR))
+        client_raw_request = await TIMEOUTS.read_timeout(
+            client_reader.readuntil(separator=http_request_parser.SEPARATOR)
+        )
         request_model = await http_request_parser.parse_http_request(client_raw_request)
-        client_raw_request_log = f'method={request_model.method} path={request_model.path}, version={request_model.version}, headers={request_model.headers}'
-        logger.info(f'>> Proxy read client_raw_request: {client_raw_request_log}')
+        global TOTAL_REQUESTS
+        TOTAL_REQUESTS += 1
 
-        upstream = upstream_pool.get_next_upstream()
-        logger.info(f'>> Selected upstream: {upstream.host}:{upstream.port}')
-        upstream_reader, upstream_writer = await TIMEOUTS.connect_timeout(asyncio.open_connection(upstream.host, upstream.port))
-        upstream_address = upstream_writer.get_extra_info('peername')
-        logger.info(f'>> Start upstream serving: {upstream_address=}')
+        if TOTAL_REQUESTS % 1000 == 0:
+            print(f"TOTAL_REQUESTS={TOTAL_REQUESTS}")
+        keep_alive = _should_keep_client_connection_alive(request_model)
+
+        upstream_connection = await upstream_connection_pool.acquire()
+        upstream_reader = upstream_connection.reader
+        upstream_writer = upstream_connection.writer
+        upstream_address = upstream_writer.get_extra_info("peername")
 
         upstream_writer.write(client_raw_request)
         await TIMEOUTS.write_timeout(upstream_writer.drain())
-
-        logger.info(f'>> Proxy sent to upstream: {client_raw_request=}')
 
         request_body_task = asyncio.create_task(
             stream_bytes(
@@ -78,16 +113,17 @@ async def _process_request(
             )
         )
 
-        # -#-# Proxy read from upstream and write to client #-#-#
-        upstream_raw_response = await TIMEOUTS.read_timeout(upstream_reader.readuntil(separator=http_response_parser.SEPARATOR))
+        upstream_raw_response = await TIMEOUTS.read_timeout(
+            upstream_reader.readuntil(separator=http_response_parser.SEPARATOR)
+        )
         response_model = await http_response_parser.parse_http_response(upstream_raw_response)
-        upstream_raw_response_log = f'status_code={response_model.status_code} reason_phrase={response_model.reason_phrase}, version={response_model.version}, headers={response_model.headers}'
-        logger.info(f'>> Proxy read upstream_raw_response: {upstream_raw_response_log}')
 
+        upstream_raw_response = _rewrite_response_connection_header(
+            raw_response=upstream_raw_response,
+            keep_alive=keep_alive,
+        )
         client_writer.write(upstream_raw_response)
         await TIMEOUTS.write_timeout(client_writer.drain())
-
-        logger.info(f'>> Proxy sent to client: {upstream_raw_response=}')
 
         response_body_task = asyncio.create_task(
             stream_bytes(
@@ -98,37 +134,56 @@ async def _process_request(
             )
         )
 
-        await asyncio.gather(
-            request_body_task,
-            response_body_task,
-        )
-
-    except asyncio.TimeoutError:
-        logger.error(f'>> Proxy timeout')
-
-    except Exception as e:
-        logger.error(f'>> Proxy error: {e}')
+        await asyncio.gather(request_body_task, response_body_task)
+        upstream_reusable = True
+        return keep_alive
 
     finally:
-        try:
-            if upstream_writer:
-                upstream_writer.close()
-                await upstream_writer.wait_closed()
-                logger.info(f'>> Stop upstream serving {upstream_address}')
-        except Exception as e:
-            logger.error(f'>> Upstream closing error {e}')
-
-        try:
-            client_writer.close()
-            await client_writer.wait_closed()
-            logger.info(f'>> Stop client serving {client_address}')
-        except Exception as e:
-            logger.error(f'>> Client closing error {e}')
+        if upstream_connection:
+            await upstream_connection_pool.release(
+                upstream_connection,
+                reusable=upstream_reusable,
+            )
 
 
 async def proxy_client(
     client_reader: StreamReader,
     client_writer: StreamWriter,
 ) -> None:
+    client_address = client_writer.get_extra_info("peername")
+    global CLIENT_CONNECTIONS
+    CLIENT_CONNECTIONS += 1
+
+    print(f"CLIENT_CONNECTIONS={CLIENT_CONNECTIONS}")
+
     async with CONNECTION_LIMIT:
-        await TIMEOUTS.total_timeout(_process_request(client_reader=client_reader, client_writer=client_writer))
+        try:
+            while True:
+                try:
+                    keep_alive = await TIMEOUTS.total_timeout(
+                        _process_one_request(
+                            client_reader=client_reader,
+                            client_writer=client_writer,
+                        )
+                    )
+
+                    if not keep_alive:
+                        break
+
+                except asyncio.IncompleteReadError:
+                    break
+
+                except asyncio.TimeoutError:
+                    logger.error(f">> Proxy timeout: {client_address}")
+                    break
+
+                except Exception as e:
+                    logger.error(f">> Proxy error: {client_address}: {e}")
+                    break
+
+        finally:
+            try:
+                client_writer.close()
+                await client_writer.wait_closed()
+            except Exception as e:
+                logger.error(f">> Client closing error {client_address}: {e}")

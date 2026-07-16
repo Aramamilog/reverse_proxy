@@ -1,18 +1,17 @@
 import asyncio
-# import uvloop
 
-
-from client_handler_v2 import proxy_client
+from client_handler import proxy_client
+from config import APP_CONFIG
 from upstream_connection_pool import upstream_connection_pool
 
 
-async def main(host: str, port: int):
+async def main() -> None:
     await upstream_connection_pool.start()
 
     srv = await asyncio.start_server(
         proxy_client,
-        host,
-        port,
+        APP_CONFIG.listen.host,
+        APP_CONFIG.listen.port,
     )
 
     try:
@@ -22,6 +21,5 @@ async def main(host: str, port: int):
         await upstream_connection_pool.close()
 
 
-if __name__ == '__main__':
-    asyncio.run(main('127.0.0.1', 8000))
-    # uvloop.run(main('127.0.0.1', 8000))
+if __name__ == "__main__":
+    asyncio.run(main())

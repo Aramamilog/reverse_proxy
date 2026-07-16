@@ -2,8 +2,7 @@ import http from "k6/http";
 import { check } from "k6";
 
 export const options = {
-  vus: 25,
-  duration: "10s",
+  gracefulStop: "0s",
   noConnectionReuse: false,
   noVUConnectionReuse: false,
 };
@@ -11,7 +10,7 @@ export const options = {
 export default function () {
   const res = http.get("http://127.0.0.1:8000/", {
     headers: {
-      "Connection": "keep-alive",
+      Connection: "keep-alive",
     },
   });
 
