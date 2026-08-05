@@ -1,0 +1,51 @@
+import multiprocessing
+
+from config import PROCESS_COUNT
+from worker import run_worker
+
+
+def main() -> None:
+    processes: list[multiprocessing.Process] = []
+
+    for worker_number in range(1, PROCESS_COUNT + 1):
+        process = multiprocessing.Process(
+            target=run_worker,
+            args=(worker_number,),
+            name=f"async-proxy-worker-{worker_number}",
+        )
+
+        process.start()
+        processes.append(process)
+
+    print(
+        f"Started {PROCESS_COUNT} async proxy processes"
+    )
+
+    try:
+        for process in processes:
+            process.join()
+
+    except KeyboardInterrupt:
+        print("Stopping process + async proxy")
+
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+
+        for process in processes:
+            process.join(timeout=5)
+
+        for process in processes:
+            if process.is_alive():
+                process.kill()
+                process.join()
+
+
+if __name__ == "__main__":
+    multiprocessing.set_start_method(
+        "spawn",
+        force=True,
+    )
+
+    main()

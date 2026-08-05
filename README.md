@@ -1,34 +1,8 @@
 # Async Reverse Proxy (MVP)
 
-Educational reverse proxy server implemented with **Python asyncio**.
+Educational reverse proxy server implemented with Python `asyncio`.
 
-The goal of this project is to understand how modern reverse proxies work by implementing core networking concepts from scratch: TCP servers, HTTP parsing, connection pooling, keep-alive, streaming, load balancing, timeout management, and benchmarking.
-
----
-
-# Features
-
-- TCP server built with `asyncio.start_server`
-- HTTP/1.1 request parsing
-- HTTP/1.1 response parsing
-- Client HTTP Keep-Alive
-- Upstream TCP connection pooling
-- Connection reuse
-- Request body streaming
-- Response body streaming
-- Backpressure support (`await writer.drain()`)
-- Round-Robin load balancing
-- YAML configuration
-- Configurable timeouts
-  - Connect
-  - Read
-  - Write
-  - Total request
-- Global client connection limit
-- Per-upstream connection pools
-- Per-upstream concurrency limits
-- Load testing with k6
-- Optional uvloop benchmark
+The purpose of this project is to study low-level networking, asynchronous programming and reverse proxy architecture by implementing everything manually instead of relying on existing web frameworks.
 
 ---
 
@@ -94,6 +68,7 @@ timeouts:
 
 limits:
   max_client_conns: 200
+  max_conns_per_upstream: 100
 
 logging:
   level: info
@@ -241,73 +216,28 @@ k6 run --vus 200 --duration 10s tests/test.js
 Environment
 
 - MacBook Pro M1 Pro
+- Apple M1 Pro
 - Python 3.14
-- asyncio
 - k6
-
-Best stable configuration
-
-- 4 upstream servers
-- pool size = 50
-- concurrency limit = 50
-- max client connections = 200
-
-| VUs | RPS | Avg | P95 | Errors |
-|----:|----:|----:|----:|-------:|
-| 25 | ~10.6k | ~2.3 ms | ~4.4 ms | 0% |
-| 50 | ~11.6k | ~4.3 ms | ~8.1 ms | 0% |
-| 100 | ~12.0k | ~8.3 ms | ~16.1 ms | 0% |
-| **200** | **~12.3k** | **~16.2 ms** | **~31 ms** | **0%** |
-
-Increasing the number of virtual users beyond **200** did not improve throughput and resulted in higher latency with occasional request failures.
+- 10-second benchmark
+- HTTP Keep-Alive enabled
 
 ---
 
-# Implemented Optimizations
+## Benchmark Summary
 
-- HTTP Keep-Alive
-- TCP connection pooling
-- Connection reuse
-- Round-Robin load balancing
-- Per-upstream concurrency limits
-- Timeout management
-- Request/response streaming
-- Backpressure handling
-- YAML configuration
+| Implementation | Best Configuration                                                                      | Best Test | RPS | Avg | P95 | Errors |
+|---------------|-----------------------------------------------------------------------------------------|-----------|----:|----:|----:|-------:|
+| Async | 4 upstreams, pool=50, concurrency=50, max_client_conns=200                              | 200 VUs | **~12.3k** | ~16.2 ms | ~31 ms | 0% |
+| Threads | 250 worker threads                                                                      | 50 VUs | **~7.9k** | ~6.3 ms | ~10.7 ms | 0% |
+| Processes + Threads | 4 processes × 250 threads                                                               | 200 VUs | **~7.2k** | ~13.9 ms | ~28.4 ms | 0% |
+| **Processes + Async** | **4 processes, 4 upstreams, pool=12, concurrency=12, max_client_conns_per_process=200** | **200 VUs** | **~14.2k** | **~14.0 ms** | **~35 ms** | **0%** |
 
----
+This experimental implementation achieved the highest throughput during local benchmarks.
 
-# Current Limitations
+It combines the scalability of asyncio with better CPU utilization through multiple worker processes.
 
-The following features are intentionally left for future iterations.
-
-- Transfer-Encoding: chunked
-- HTTP/2
-- HTTPS
-- Health checks
-- Retry policy
-- Circuit breaker
-- Rate limiting
-- Metrics endpoint
-- Dynamic upstream discovery
-- Configuration hot reload (SIGHUP)
-
----
-
-# Learning Goals Covered
-
-- asyncio event loop
-- TCP networking
-- HTTP protocol
-- Coroutines
-- Tasks
-- Streaming
-- Backpressure
-- Connection pooling
-- Keep-Alive
-- Load balancing
-- Timeout handling
-- Benchmarking with k6
+The current Async implementation can be evolved into this architecture in future iterations.
 
 ---
 
@@ -326,3 +256,57 @@ No measurable throughput improvement was observed on the test environment.
 | 100 | ~12.0k RPS | ~12.0k RPS |
 
 The final implementation keeps the default asyncio event loop.
+
+---
+
+## Alternative Implementations
+
+To better understand Python concurrency models, several reverse proxy implementations were developed and benchmarked.
+
+### Async
+
+- asyncio
+- Single event loop
+- Non-blocking sockets
+
+Reference implementation used throughout the project.
+
+---
+
+### Threads
+
+- socket
+- ThreadPoolExecutor
+- queue.Queue
+
+Implemented to compare classic thread-based concurrency with asynchronous I/O.
+
+---
+
+### Processes + Threads
+
+- multiprocessing
+- ThreadPoolExecutor
+- SO_REUSEPORT
+
+Implemented to evaluate the impact of combining processes with blocking thread pools.
+
+---
+
+### Processes + Async
+
+- multiprocessing
+- asyncio
+- SO_REUSEPORT
+
+Experimental implementation combining multiple worker processes with asynchronous event loops.
+
+This version achieved the highest throughput during local benchmarks (~14k requests/sec), demonstrating that multi-process asyncio architecture scales better for I/O-bound workloads.
+
+---
+
+## Documentation
+
+Additional project documentation:
+
+- [ROADMAP.md](ROADMAP.md)

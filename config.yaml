@@ -31,6 +31,7 @@ timeouts:
 
 limits:
   max_client_conns: 200 # Это общий лимит клиентских TCP-соединений.
+  max_conns_per_upstream: 100
 
 logging:
   level: "info"
