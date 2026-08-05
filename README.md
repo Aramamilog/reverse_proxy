@@ -226,12 +226,13 @@ Environment
 
 ## Benchmark Summary
 
-| Implementation | Best Configuration                                                                      | Best Test | RPS | Avg | P95 | Errors |
-|---------------|-----------------------------------------------------------------------------------------|-----------|----:|----:|----:|-------:|
-| Async | 4 upstreams, pool=50, concurrency=50, max_client_conns=200                              | 200 VUs | **~12.3k** | ~16.2 ms | ~31 ms | 0% |
-| Threads | 250 worker threads                                                                      | 50 VUs | **~7.9k** | ~6.3 ms | ~10.7 ms | 0% |
-| Processes + Threads | 4 processes × 250 threads                                                               | 200 VUs | **~7.2k** | ~13.9 ms | ~28.4 ms | 0% |
-| **Processes + Async** | **4 processes, 4 upstreams, pool=12, concurrency=12, max_client_conns_per_process=200** | **200 VUs** | **~14.2k** | **~14.0 ms** | **~35 ms** | **0%** |
+| Implementation      | Configuration                                                                       | VUs       | RPS        | Avg                | P95            | Errors  |
+|---------------------|-------------------------------------------------------------------------------------|-----------|------------|--------------------|----------------|---------|
+| Async               | 4 upstreams, pool=50, concurrency=50, max_client_conns=200                          | **200**   | **~12.3k** | **~16.2 ms**       | **~31 ms**     | **0%**  |
+| Threads             | 250 worker threads                                                                  | **50**    | **~7.9k**  | **~6.3 ms**        | **~10.7 ms**   | **0%**  |
+| Processes + Threads | 4 processes × 250 threads                                                           | **200**   | **~7.2k**  | **~13.9 ms**       | **~28.4 ms**   | **0%**  |
+| Processes + Async   | 4 processes, 4 upstreams, pool=12, concurrency=12, max_client_conns_per_process=200 | **200**   | **~14.2k** | **~14.0 ms**       | **~35 ms**     | **0%**  |
+| Nginx baseline      | worker_processes 4                                                                  | **200**   | **~23.1k** | **~8.6 ms**        | **~18.0 ms**   | **0%**  |
 
 This experimental implementation achieved the highest throughput during local benchmarks.
 
